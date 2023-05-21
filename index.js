@@ -1,44 +1,67 @@
-import http from "http";
-import express from "express";
-import logger from "morgan";
-import cors from "cors";
-// routes
-import indexRouter from "./Server/routes/index.js";
-import userRouter from "./Server/routes/user.js";
-import chatRoomRouter from "./Server/routes/chatRoom.js";
-import deleteRouter from "./Server/routes/delete.js";
-// middlewares
-import { decode } from './Server/middlewares/jwt.js'
-import "./Server/config/mongo.js";
-
+const express = require("express");
 const app = express();
-
-/** Get port from environment and store in Express. */
-const port = process.env.PORT || "3000";
-app.set("port", port);
-
-app.use(logger("dev"));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-app.use("/", indexRouter);
-app.use("/users", userRouter);
-app.use("/room", decode, chatRoomRouter);
-app.use("/delete", deleteRouter);
-
-/** catch 404 and forward to error handler */
-app.use('*', (req, res) => {
-  return res.status(404).json({
-    success: false,
-    message: 'API endpoint doesnt exist'
-  })
+const http = require("http").Server(app);
+const cors = require("cors");
+const PORT = 80;
+const socketIO = require("socket.io")(http, {
+	cors: {
+		origin: "http://localhost:80",
+	},
 });
 
-/** Create HTTP server. */
-const server = http.createServer(app);
-/** Listen on provided port, on all network interfaces. */
-server.listen(port);
-/** Event listener for HTTP server "listening" event. */
-server.on("listening", () => {
-  console.log(`Listening on port:: http://localhost:${port}/`)
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(cors());
+
+const generateID = () => Math.random().toString(36).substring(2, 10);
+let chatRooms = [];
+
+socketIO.on("connection", (socket) => {
+	console.log(`⚡: ${socket.id} user just connected!`);
+
+	socket.on("createRoom", (name) => {
+		socket.join(name);
+		chatRooms.unshift({ id: generateID(), name, messages: [] });
+		socket.emit("roomsList", chatRooms);
+	});
+
+	socket.on("findRoom", (id) => {
+		let result = chatRooms.filter((room) => room.id == id);
+		// console.log(chatRooms);
+		socket.emit("foundRoom", result[0].messages);
+		// console.log("Messages Form", result[0].messages);
+	});
+
+	socket.on("newMessage", (data) => {
+		const { room_id, message, user, timestamp } = data;
+		let result = chatRooms.filter((room) => room.id == room_id);
+		const newMessage = {
+			id: generateID(),
+			text: message,
+			user,
+			time: `${timestamp.hour}:${timestamp.mins}`,
+		};
+		console.log("New Message", newMessage);
+		socket.to(result[0].name).emit("roomMessage", newMessage);
+		result[0].messages.push(newMessage);
+
+		socket.emit("roomsList", chatRooms);
+		socket.emit("foundRoom", result[0].messages);
+	});
+	socket.on("disconnect", () => {
+		socket.disconnect();
+		console.log("🔥: A user disconnected");
+	});
+});
+
+app.get('/',(req, res) => {
+	res.send('hi')
+})
+
+app.get("/api", (req, res) => {
+	res.json(chatRooms);
+});
+
+http.listen(PORT, () => {
+	console.log(`Server listening on ${PORT}`);
 });
